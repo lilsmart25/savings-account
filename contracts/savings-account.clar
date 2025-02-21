@@ -138,3 +138,113 @@
         (ok true))
 )
 
+;; Add these at the top with other constants
+(define-constant REFERRAL_BONUS u50) ;; 50 basis points (0.5%)
+(define-map referrals { referrer: principal } { total-referrals: uint })
+
+(define-public (refer-user (new-user principal))
+    (begin
+        (let ((referrer-stats (default-to { total-referrals: u0 } 
+                             (map-get? referrals { referrer: tx-sender }))))
+            (map-set referrals 
+                { referrer: tx-sender }
+                { total-referrals: (+ u1 (get total-referrals referrer-stats)) })
+            (ok true))))
+
+
+(define-map savings-streak 
+    { user: principal } 
+    { consecutive-deposits: uint, last-deposit: uint })
+
+(define-public (track-deposit-streak)
+    (let ((current-streak (default-to 
+            { consecutive-deposits: u0, last-deposit: block-height }
+            (map-get? savings-streak { user: tx-sender }))))
+        (map-set savings-streak 
+            { user: tx-sender }
+            { consecutive-deposits: (+ u1 (get consecutive-deposits current-streak)),
+              last-deposit: block-height })
+        (ok true)))
+
+
+
+(define-constant ROUND_UP_MULTIPLIER u10)
+
+(define-public (round-up-deposit (amount uint))
+    (let ((rounded-amount (* (/ (+ amount u9) u10) u10)))
+        (deposit (- rounded-amount amount))))
+
+
+
+(define-map savings-challenges 
+    { user: principal }
+    { challenge-type: (string-ascii 20),
+      target: uint,
+      start-date: uint,
+      end-date: uint,
+      completed: bool })
+
+(define-public (start-challenge (challenge-type (string-ascii 20)) (target uint) (duration uint))
+    (begin
+        (map-set savings-challenges
+            { user: tx-sender }
+            { challenge-type: challenge-type,
+              target: target,
+              start-date: block-height,
+              end-date: (+ block-height duration),
+              completed: false })
+        (ok true)))
+
+
+
+(define-map savings-pools
+    { pool-id: uint }
+    { members: (list 10 principal),
+      target: uint,
+      current-amount: uint })
+
+(define-data-var pool-counter uint u0)
+
+(define-public (create-pool (target uint))
+    (begin
+        (var-set pool-counter (+ (var-get pool-counter) u1))
+        (map-set savings-pools
+            { pool-id: (var-get pool-counter) }
+            { members: (list tx-sender),
+              target: target,
+              current-amount: u0 })
+        (ok (var-get pool-counter))))
+
+
+
+(define-map scheduled-deposits
+    { user: principal }
+    { amount: uint,
+      interval: uint,
+      last-deposit: uint,
+      active: bool })
+
+(define-public (setup-auto-deposit (amount uint) (interval uint))
+    (begin
+        (map-set scheduled-deposits
+            { user: tx-sender }
+            { amount: amount,
+              interval: interval,
+              last-deposit: block-height,
+              active: true })
+        (ok true)))
+
+
+
+(define-map withdrawal-locks
+    { user: principal }
+    { locked-until: uint,
+      emergency-contact: principal })
+
+(define-public (set-withdrawal-lock (duration uint))
+    (begin
+        (map-set withdrawal-locks
+            { user: tx-sender }
+            { locked-until: (+ block-height duration),
+              emergency-contact: tx-sender })
+        (ok true)))
