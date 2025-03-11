@@ -304,3 +304,49 @@
             { user: tx-sender }
             { backup-key: backup-key, created-at: block-height })
         (ok true)))
+
+
+(define-map category-savings 
+    { user: principal, category: (string-ascii 20) } 
+    { current: uint, target: uint })
+
+(define-public (create-category-goal (category (string-ascii 20)) (target uint))
+    (begin
+        (asserts! (> target u0) ERR_AMOUNT_ZERO)
+        (map-set category-savings 
+            { user: tx-sender, category: category }
+            { current: u0, target: target })
+        (ok true)))
+
+
+(define-map notification-settings 
+    { user: principal } 
+    { notify-above: uint, enabled: bool })
+
+(define-public (set-notification-threshold (amount uint))
+    (begin
+        (asserts! (> amount u0) ERR_AMOUNT_ZERO)
+        (map-set notification-settings 
+            { user: tx-sender }
+            { notify-above: amount, enabled: true })
+        (ok true)))
+
+
+(define-map activity-stats 
+    { user: principal } 
+    { deposits-count: uint, withdrawals-count: uint, last-active: uint })
+
+(define-public (update-activity-stats (action (string-ascii 10)))
+    (let ((current-stats (default-to 
+            { deposits-count: u0, withdrawals-count: u0, last-active: block-height }
+            (map-get? activity-stats { user: tx-sender }))))
+        (map-set activity-stats 
+            { user: tx-sender }
+            { deposits-count: (match action 
+                "deposit" (+ u1 (get deposits-count current-stats))
+                (get deposits-count current-stats)),
+              withdrawals-count: (match action 
+                "withdraw" (+ u1 (get withdrawals-count current-stats))
+                (get withdrawals-count current-stats)),
+              last-active: block-height })
+        (ok true)))
