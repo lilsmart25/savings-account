@@ -248,3 +248,59 @@
             { locked-until: (+ block-height duration),
               emergency-contact: tx-sender })
         (ok true)))
+
+
+;; Add at the top with other constants
+(define-constant BASIC_TYPE u1)
+(define-constant PREMIUM_TYPE u2)
+(define-constant VIP_TYPE u3)
+
+(define-map account-types { user: principal } { type: uint })
+
+(define-public (upgrade-account-type (new-type uint))
+    (begin
+        (asserts! (or (is-eq new-type BASIC_TYPE) 
+                     (is-eq new-type PREMIUM_TYPE)
+                     (is-eq new-type VIP_TYPE)) 
+                 (err u103))
+        (map-set account-types { user: tx-sender } { type: new-type })
+        (ok true)))
+
+
+(define-constant MILESTONE_1 u1000)
+(define-constant MILESTONE_2 u5000)
+(define-constant MILESTONE_3 u10000)
+
+(define-map achieved-milestones { user: principal } { milestones: (list 10 uint) })
+
+(define-public (check-milestones)
+    (let ((balance (get-balance tx-sender)))
+        (begin
+            (if (>= balance MILESTONE_1)
+                (map-set achieved-milestones 
+                    { user: tx-sender }
+                    { milestones: (list MILESTONE_1) })
+                true)
+            (ok true))))
+
+
+(define-map beneficiaries { account: principal } { beneficiary: principal })
+
+(define-public (set-beneficiary (beneficiary-address principal))
+    (begin
+        (map-set beneficiaries 
+            { account: tx-sender }
+            { beneficiary: beneficiary-address })
+        (ok true)))
+
+
+(define-map recovery-keys 
+    { user: principal } 
+    { backup-key: (string-ascii 50), created-at: uint })
+
+(define-public (set-recovery-key (backup-key (string-ascii 50)))
+    (begin
+        (map-set recovery-keys 
+            { user: tx-sender }
+            { backup-key: backup-key, created-at: block-height })
+        (ok true)))
