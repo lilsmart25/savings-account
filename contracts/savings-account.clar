@@ -138,3 +138,231 @@
         (ok true))
 )
 
+;; Add these at the top with other constants
+(define-constant REFERRAL_BONUS u50) ;; 50 basis points (0.5%)
+(define-map referrals { referrer: principal } { total-referrals: uint })
+
+(define-public (refer-user (new-user principal))
+    (begin
+        (let ((referrer-stats (default-to { total-referrals: u0 } 
+                             (map-get? referrals { referrer: tx-sender }))))
+            (map-set referrals 
+                { referrer: tx-sender }
+                { total-referrals: (+ u1 (get total-referrals referrer-stats)) })
+            (ok true))))
+
+
+(define-map savings-streak 
+    { user: principal } 
+    { consecutive-deposits: uint, last-deposit: uint })
+
+(define-public (track-deposit-streak)
+    (let ((current-streak (default-to 
+            { consecutive-deposits: u0, last-deposit: block-height }
+            (map-get? savings-streak { user: tx-sender }))))
+        (map-set savings-streak 
+            { user: tx-sender }
+            { consecutive-deposits: (+ u1 (get consecutive-deposits current-streak)),
+              last-deposit: block-height })
+        (ok true)))
+
+
+
+(define-constant ROUND_UP_MULTIPLIER u10)
+
+(define-public (round-up-deposit (amount uint))
+    (let ((rounded-amount (* (/ (+ amount u9) u10) u10)))
+        (deposit (- rounded-amount amount))))
+
+
+
+(define-map savings-challenges 
+    { user: principal }
+    { challenge-type: (string-ascii 20),
+      target: uint,
+      start-date: uint,
+      end-date: uint,
+      completed: bool })
+
+(define-public (start-challenge (challenge-type (string-ascii 20)) (target uint) (duration uint))
+    (begin
+        (map-set savings-challenges
+            { user: tx-sender }
+            { challenge-type: challenge-type,
+              target: target,
+              start-date: block-height,
+              end-date: (+ block-height duration),
+              completed: false })
+        (ok true)))
+
+
+
+(define-map savings-pools
+    { pool-id: uint }
+    { members: (list 10 principal),
+      target: uint,
+      current-amount: uint })
+
+(define-data-var pool-counter uint u0)
+
+(define-public (create-pool (target uint))
+    (begin
+        (var-set pool-counter (+ (var-get pool-counter) u1))
+        (map-set savings-pools
+            { pool-id: (var-get pool-counter) }
+            { members: (list tx-sender),
+              target: target,
+              current-amount: u0 })
+        (ok (var-get pool-counter))))
+
+
+
+(define-map scheduled-deposits
+    { user: principal }
+    { amount: uint,
+      interval: uint,
+      last-deposit: uint,
+      active: bool })
+
+(define-public (setup-auto-deposit (amount uint) (interval uint))
+    (begin
+        (map-set scheduled-deposits
+            { user: tx-sender }
+            { amount: amount,
+              interval: interval,
+              last-deposit: block-height,
+              active: true })
+        (ok true)))
+
+
+
+(define-map withdrawal-locks
+    { user: principal }
+    { locked-until: uint,
+      emergency-contact: principal })
+
+(define-public (set-withdrawal-lock (duration uint))
+    (begin
+        (map-set withdrawal-locks
+            { user: tx-sender }
+            { locked-until: (+ block-height duration),
+              emergency-contact: tx-sender })
+        (ok true)))
+
+
+;; Add at the top with other constants
+(define-constant BASIC_TYPE u1)
+(define-constant PREMIUM_TYPE u2)
+(define-constant VIP_TYPE u3)
+
+(define-map account-types { user: principal } { type: uint })
+
+(define-public (upgrade-account-type (new-type uint))
+    (begin
+        (asserts! (or (is-eq new-type BASIC_TYPE) 
+                     (is-eq new-type PREMIUM_TYPE)
+                     (is-eq new-type VIP_TYPE)) 
+                 (err u103))
+        (map-set account-types { user: tx-sender } { type: new-type })
+        (ok true)))
+
+
+(define-constant MILESTONE_1 u1000)
+(define-constant MILESTONE_2 u5000)
+(define-constant MILESTONE_3 u10000)
+
+(define-map achieved-milestones { user: principal } { milestones: (list 10 uint) })
+
+(define-public (check-milestones)
+    (let ((balance (get-balance tx-sender)))
+        (begin
+            (if (>= balance MILESTONE_1)
+                (map-set achieved-milestones 
+                    { user: tx-sender }
+                    { milestones: (list MILESTONE_1) })
+                true)
+            (ok true))))
+
+
+(define-map beneficiaries { account: principal } { beneficiary: principal })
+
+(define-public (set-beneficiary (beneficiary-address principal))
+    (begin
+        (map-set beneficiaries 
+            { account: tx-sender }
+            { beneficiary: beneficiary-address })
+        (ok true)))
+
+
+(define-map recovery-keys 
+    { user: principal } 
+    { backup-key: (string-ascii 50), created-at: uint })
+
+(define-public (set-recovery-key (backup-key (string-ascii 50)))
+    (begin
+        (map-set recovery-keys 
+            { user: tx-sender }
+            { backup-key: backup-key, created-at: block-height })
+        (ok true)))
+
+
+(define-map category-savings 
+    { user: principal, category: (string-ascii 20) } 
+    { current: uint, target: uint })
+
+(define-public (create-category-goal (category (string-ascii 20)) (target uint))
+    (begin
+        (asserts! (> target u0) ERR_AMOUNT_ZERO)
+        (map-set category-savings 
+            { user: tx-sender, category: category }
+            { current: u0, target: target })
+        (ok true)))
+
+
+(define-map notification-settings 
+    { user: principal } 
+    { notify-above: uint, enabled: bool })
+
+(define-public (set-notification-threshold (amount uint))
+    (begin
+        (asserts! (> amount u0) ERR_AMOUNT_ZERO)
+        (map-set notification-settings 
+            { user: tx-sender }
+            { notify-above: amount, enabled: true })
+        (ok true)))
+
+
+(define-map activity-stats 
+    { user: principal } 
+    { deposits-count: uint, withdrawals-count: uint, last-active: uint })
+
+(define-public (update-activity-stats (action (string-ascii 10)))
+    (let ((current-stats (default-to 
+            { deposits-count: u0, withdrawals-count: u0, last-active: block-height }
+            (map-get? activity-stats { user: tx-sender }))))
+        (map-set activity-stats 
+            { user: tx-sender }
+            { deposits-count: (if (is-eq action "deposit")
+                (+ u1 (get deposits-count current-stats))
+                (get deposits-count current-stats)),
+              withdrawals-count: (if (is-eq action "withdraw")
+                (+ u1 (get withdrawals-count current-stats))
+                (get withdrawals-count current-stats)),
+              last-active: block-height })
+        (ok true)))
+
+
+(define-map achievements 
+    { user: principal } 
+    { badges: (list 10 (string-ascii 20)), points: uint })
+
+(define-public (award-achievement (badge (string-ascii 20)))
+    (let ((current-achievements (default-to 
+            { badges: (list ), points: u0 }
+            (map-get? achievements { user: tx-sender }))))
+        (map-set achievements 
+            { user: tx-sender }
+            { badges: (unwrap-panic (as-max-len? 
+                (append (get badges current-achievements) badge) u10)),
+              points: (+ u10 (get points current-achievements)) })
+        (ok true)))
