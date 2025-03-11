@@ -342,11 +342,27 @@
             (map-get? activity-stats { user: tx-sender }))))
         (map-set activity-stats 
             { user: tx-sender }
-            { deposits-count: (match action 
-                "deposit" (+ u1 (get deposits-count current-stats))
+            { deposits-count: (if (is-eq action "deposit")
+                (+ u1 (get deposits-count current-stats))
                 (get deposits-count current-stats)),
-              withdrawals-count: (match action 
-                "withdraw" (+ u1 (get withdrawals-count current-stats))
+              withdrawals-count: (if (is-eq action "withdraw")
+                (+ u1 (get withdrawals-count current-stats))
                 (get withdrawals-count current-stats)),
               last-active: block-height })
+        (ok true)))
+
+
+(define-map achievements 
+    { user: principal } 
+    { badges: (list 10 (string-ascii 20)), points: uint })
+
+(define-public (award-achievement (badge (string-ascii 20)))
+    (let ((current-achievements (default-to 
+            { badges: (list ), points: u0 }
+            (map-get? achievements { user: tx-sender }))))
+        (map-set achievements 
+            { user: tx-sender }
+            { badges: (unwrap-panic (as-max-len? 
+                (append (get badges current-achievements) badge) u10)),
+              points: (+ u10 (get points current-achievements)) })
         (ok true)))
