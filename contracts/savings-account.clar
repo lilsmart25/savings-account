@@ -366,3 +366,179 @@
                 (append (get badges current-achievements) badge) u10)),
               points: (+ u10 (get points current-achievements)) })
         (ok true)))
+
+
+
+(define-constant TIER1_THRESHOLD u1000)
+(define-constant TIER2_THRESHOLD u5000)
+(define-constant TIER3_THRESHOLD u10000)
+(define-constant TIER1_RATE u5)
+(define-constant TIER2_RATE u7)
+(define-constant TIER3_RATE u10)
+
+(define-public (get-applicable-interest-rate)
+  (let ((balance (get-balance tx-sender)))
+    (ok (if (>= balance TIER3_THRESHOLD) 
+          TIER3_RATE
+          (if (>= balance TIER2_THRESHOLD)
+            TIER2_RATE
+            (if (>= balance TIER1_THRESHOLD)
+              TIER1_RATE
+              INTEREST_RATE))))))
+(define-public (accrue-tiered-interest)
+  (let (
+    (current-balance (default-to { balance: u0 } (map-get? balances { user: tx-sender })))
+    (last-block (default-to { block: block-height } (map-get? last-interest-block { user: tx-sender })))
+    (blocks-passed (- block-height (get block last-block)))
+    (applicable-rate (unwrap-panic (get-applicable-interest-rate)))
+    (interest-amount (/ (* (get balance current-balance) applicable-rate blocks-passed) (* u100 BLOCKS_PER_YEAR)))
+  )
+    (map-set balances { user: tx-sender } { balance: (+ (get balance current-balance) interest-amount) })
+    (map-set last-interest-block { user: tx-sender } { block: block-height })
+    (ok interest-amount)))
+
+
+
+
+(define-map joint-accounts 
+  { account-id: uint } 
+  { owners: (list 5 principal), balance: uint })
+
+(define-data-var joint-account-counter uint u0)
+
+(define-public (create-joint-account (co-owner principal))
+  (begin
+    (var-set joint-account-counter (+ (var-get joint-account-counter) u1))
+    (map-set joint-accounts
+      { account-id: (var-get joint-account-counter) }
+      { owners: (list tx-sender co-owner), balance: u0 })
+    (ok (var-get joint-account-counter))))
+
+(define-public (deposit-to-joint-account (account-id uint) (amount uint))
+  (let ((account (default-to { owners: (list ), balance: u0 } (map-get? joint-accounts { account-id: account-id }))))
+    (begin
+      (asserts! (> amount u0) ERR_AMOUNT_ZERO)
+      (asserts! (is-some (index-of (get owners account) tx-sender)) (err u104))
+      (map-set joint-accounts 
+        { account-id: account-id }
+        { owners: (get owners account), balance: (+ amount (get balance account)) })
+      (ok true))))
+
+(define-public (withdraw-from-joint-account (account-id uint) (amount uint))
+  (let ((account (default-to { owners: (list ), balance: u0 } (map-get? joint-accounts { account-id: account-id }))))
+    (begin
+      (asserts! (> amount u0) ERR_AMOUNT_ZERO)
+      (asserts! (is-some (index-of (get owners account) tx-sender)) (err u104))
+      (asserts! (>= (get balance account) amount) ERR_INSUFFICIENT_FUNDS)
+      (map-set joint-accounts 
+        { account-id: account-id }
+        { owners: (get owners account), balance: (- (get balance account) amount) })
+      (ok true))))
+
+
+
+(define-constant LADDER_BONUS_RATE u2)
+
+(define-map timed-deposits
+  { user: principal, deposit-id: uint }
+  { amount: uint, lock-until: uint, bonus-rate: uint })
+
+(define-data-var deposit-id-counter uint u0)
+
+(define-public (create-timed-deposit (amount uint) (lock-blocks uint))
+  (let ((user-balance (get-balance tx-sender)))
+    (begin
+      (asserts! (> amount u0) ERR_AMOUNT_ZERO)
+      (asserts! (>= user-balance amount) ERR_INSUFFICIENT_FUNDS)
+      (var-set deposit-id-counter (+ (var-get deposit-id-counter) u1))
+      (map-set balances 
+        { user: tx-sender } 
+        { balance: (- user-balance amount) })
+      (map-set timed-deposits
+        { user: tx-sender, deposit-id: (var-get deposit-id-counter) }
+        { amount: amount, 
+          lock-until: (+ block-height lock-blocks), 
+          bonus-rate: LADDER_BONUS_RATE })
+      (ok (var-get deposit-id-counter)))))
+
+
+
+(define-map spending-categories
+  { user: principal, category: (string-ascii 20) }
+  { total-spent: uint, last-updated: uint })
+
+(define-public (record-spending (amount uint) (category (string-ascii 20)))
+  (let ((current-data (default-to 
+                      { total-spent: u0, last-updated: block-height }
+                      (map-get? spending-categories { user: tx-sender, category: category }))))
+    (begin
+      (asserts! (> amount u0) ERR_AMOUNT_ZERO)
+      (map-set spending-categories
+        { user: tx-sender, category: category }
+        { total-spent: (+ amount (get total-spent current-data)),
+          last-updated: block-height })
+      (ok true))))
+
+(define-read-only (get-category-spending (category (string-ascii 20)))
+  (let ((data (default-to 
+              { total-spent: u0, last-updated: u0 }
+              (map-get? spending-categories { user: tx-sender, category: category }))))
+    (ok (get total-spent data))))
+
+(define-read-only (get-spending-summary)
+  (ok {
+    food: (unwrap-panic (get-category-spending "food")),
+    housing: (unwrap-panic (get-category-spending "housing")),
+    transport: (unwrap-panic (get-category-spending "transport")),
+    entertainment: (unwrap-panic (get-category-spending "entertainment"))
+  }))
+
+
+
+  (define-map boost-events
+  { event-id: uint }
+  { multiplier: uint, start-block: uint, end-block: uint, active: bool })
+
+(define-data-var event-counter uint u0)
+
+(define-public (create-boost-event (multiplier uint) (duration uint))
+  (begin
+    (var-set event-counter (+ (var-get event-counter) u1))
+    (map-set boost-events
+      { event-id: (var-get event-counter) }
+      { multiplier: multiplier,
+        start-block: block-height,
+        end-block: (+ block-height duration),
+        active: true })
+    (ok (var-get event-counter))))
+
+(define-public (deposit-with-boost (amount uint) (event-id uint))
+  (let ((event (default-to 
+               { multiplier: u0, start-block: u0, end-block: u0, active: false }
+               (map-get? boost-events { event-id: event-id })))
+        (boosted-amount (/ (* amount (get multiplier event)) u100)))
+    (begin
+      (asserts! (> amount u0) ERR_AMOUNT_ZERO)
+      (asserts! (get active event) (err u106))
+      (asserts! (and (>= block-height (get start-block event))
+                    (<= block-height (get end-block event))) (err u107))
+      (let ((current-balance (default-to { balance: u0 } (map-get? balances { user: tx-sender }))))
+        (map-set balances 
+          { user: tx-sender } 
+          { balance: (+ (+ amount boosted-amount) (get balance current-balance)) }))
+      (ok (+ amount boosted-amount)))))
+
+
+
+
+(define-map round-up-rules
+  { user: principal }
+  { enabled: bool, round-to: uint })
+
+(define-public (set-round-up-rule (enabled bool) (round-to uint))
+  (begin
+    (asserts! (> round-to u0) ERR_AMOUNT_ZERO)
+    (map-set round-up-rules
+      { user: tx-sender }
+      { enabled: enabled, round-to: round-to })
+    (ok true)))
