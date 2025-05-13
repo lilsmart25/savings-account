@@ -542,3 +542,76 @@
       { user: tx-sender }
       { enabled: enabled, round-to: round-to })
     (ok true)))
+
+
+(define-map token-balances 
+    { user: principal, token-contract: principal } 
+    { balance: uint })
+
+(define-public (deposit-token (token-contract principal) (amount uint))
+    (let ((sender tx-sender))
+        (begin
+            (asserts! (> amount u0) ERR_AMOUNT_ZERO)
+            ;; (try! (contract-call? token-contract transfer amount sender (as-contract tx-sender) none))
+            (let ((current-balance (default-to { balance: u0 } 
+                (map-get? token-balances { user: sender, token-contract: token-contract }))))
+                (map-set token-balances 
+                    { user: sender, token-contract: token-contract }
+                    { balance: (+ amount (get balance current-balance)) })
+                (ok true)))))
+
+(define-public (withdraw-token (token-contract principal) (amount uint))
+    (let ((sender tx-sender)
+          (current-balance (default-to { balance: u0 } 
+            (map-get? token-balances { user: sender, token-contract: token-contract }))))
+        (begin
+            (asserts! (>= (get balance current-balance) amount) ERR_INSUFFICIENT_FUNDS)
+            ;; (try! (as-contract (contract-call? token-contract transfer 
+                ;; amount 
+                ;; (as-contract tx-sender)
+                ;; sender 
+                ;; none)))
+            (map-set token-balances 
+                { user: sender, token-contract: token-contract }
+                { balance: (- (get balance current-balance) amount) })
+            (ok true))))
+
+(define-read-only (get-token-balance (user principal) (token-contract principal))
+    (default-to u0 
+        (get balance (map-get? token-balances { user: user, token-contract: token-contract }))))
+
+
+
+(define-constant REWARD_PERCENTAGE u5)
+(define-constant MIN_GOAL_AMOUNT u1000)
+
+(define-map savings-rewards
+    { user: principal }
+    { goal-amount: uint, current-streak: uint, rewards-earned: uint })
+
+(define-public (set-reward-goal (goal-amount uint))
+    (begin
+        (asserts! (>= goal-amount MIN_GOAL_AMOUNT) ERR_AMOUNT_ZERO)
+        (map-set savings-rewards
+            { user: tx-sender }
+            { goal-amount: goal-amount, current-streak: u0, rewards-earned: u0 })
+        (ok true)))
+
+(define-public (check-and-claim-rewards)
+    (let ((user-rewards (default-to 
+            { goal-amount: u0, current-streak: u0, rewards-earned: u0 }
+            (map-get? savings-rewards { user: tx-sender })))
+          (current-balance (get-balance tx-sender)))
+        (if (>= current-balance (get goal-amount user-rewards))
+            (let ((reward-amount (/ (* current-balance REWARD_PERCENTAGE) u100)))
+                (begin
+                    (map-set balances 
+                        { user: tx-sender }
+                        { balance: (+ current-balance reward-amount) })
+                    (map-set savings-rewards
+                        { user: tx-sender }
+                        { goal-amount: (get goal-amount user-rewards),
+                          current-streak: (+ (get current-streak user-rewards) u1),
+                          rewards-earned: (+ (get rewards-earned user-rewards) reward-amount) })
+                    (ok reward-amount)))
+            (ok u0))))
