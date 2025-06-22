@@ -615,3 +615,86 @@
                           rewards-earned: (+ (get rewards-earned user-rewards) reward-amount) })
                     (ok reward-amount)))
             (ok u0))))
+
+(define-constant COMPOUND_DAILY u1)
+(define-constant COMPOUND_WEEKLY u7)
+(define-constant COMPOUND_MONTHLY u30)
+(define-constant COMPOUND_QUARTERLY u90)
+(define-constant COMPOUND_ANNUALLY u365)
+
+(define-map compound-settings
+    { user: principal }
+    { frequency: uint, last-compound: uint, auto-compound: bool })
+
+(define-map interest-projections
+    { user: principal }
+    { projected-balance: uint, projection-date: uint, annual-rate: uint })
+
+(define-data-var compound-counter uint u0)
+
+(define-public (set-compound-frequency (frequency uint))
+    (begin
+        (asserts! (or (is-eq frequency COMPOUND_DAILY)
+                     (is-eq frequency COMPOUND_WEEKLY)
+                     (is-eq frequency COMPOUND_MONTHLY)
+                     (is-eq frequency COMPOUND_QUARTERLY)
+                     (is-eq frequency COMPOUND_ANNUALLY))
+                 (err u108))
+        (map-set compound-settings
+            { user: tx-sender }
+            { frequency: frequency, last-compound: block-height, auto-compound: true })
+        (ok true)))
+
+
+(define-public (execute-compound-interest)
+    (let ((settings (default-to 
+            { frequency: COMPOUND_ANNUALLY, last-compound: block-height, auto-compound: false }
+            (map-get? compound-settings { user: tx-sender })))
+          (current-balance (default-to { balance: u0 } (map-get? balances { user: tx-sender })))
+          (blocks-since-last (- block-height (get last-compound settings))))
+        (if (and (get auto-compound settings) 
+                (>= blocks-since-last (get frequency settings)))
+            (let ((applicable-rate (unwrap-panic (get-applicable-interest-rate)))
+                  (periods-passed (/ blocks-since-last (get frequency settings)))
+                  (rate-per-period (/ applicable-rate (get frequency settings)))
+                  (compound-amount (/ (* (get balance current-balance) rate-per-period periods-passed) u100)))
+                (begin
+                    (map-set balances 
+                        { user: tx-sender } 
+                        { balance: (+ (get balance current-balance) compound-amount) })
+                    (map-set compound-settings
+                        { user: tx-sender }
+                        { frequency: (get frequency settings),
+                          last-compound: block-height,
+                          auto-compound: (get auto-compound settings) })
+                    (var-set compound-counter (+ (var-get compound-counter) u1))
+                    (ok compound-amount)))
+            (ok u0))))
+
+
+
+(define-read-only (get-compound-schedule)
+    (let ((settings (default-to 
+            { frequency: COMPOUND_ANNUALLY, last-compound: block-height, auto-compound: false }
+            (map-get? compound-settings { user: tx-sender }))))
+        (ok {
+            frequency: (get frequency settings),
+            last-compound: (get last-compound settings),
+            next-compound: (+ (get last-compound settings) (get frequency settings)),
+            auto-compound-enabled: (get auto-compound settings),
+            blocks-until-next: (- (+ (get last-compound settings) (get frequency settings)) block-height)
+        })))
+
+(define-public (toggle-auto-compound)
+    (let ((current-settings (default-to 
+            { frequency: COMPOUND_ANNUALLY, last-compound: block-height, auto-compound: false }
+            (map-get? compound-settings { user: tx-sender }))))
+        (begin
+            (map-set compound-settings
+                { user: tx-sender }
+                { frequency: (get frequency current-settings),
+                  last-compound: (get last-compound current-settings),
+                  auto-compound: (not (get auto-compound current-settings)) })
+            (ok (not (get auto-compound current-settings))))))
+
+
