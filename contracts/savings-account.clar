@@ -697,4 +697,179 @@
                   auto-compound: (not (get auto-compound current-settings)) })
             (ok (not (get auto-compound current-settings))))))
 
+(define-constant HIGH_YIELD_PROTOCOL u1)
+(define-constant STABLE_YIELD_PROTOCOL u2)
+(define-constant BALANCED_YIELD_PROTOCOL u3)
+
+(define-map yield-farms
+    { protocol-id: uint }
+    { apy: uint, risk-level: uint, min-amount: uint, active: bool })
+
+(define-map user-farm-allocations
+    { user: principal }
+    { protocol-1-percent: uint, protocol-2-percent: uint, protocol-3-percent: uint, auto-reallocate: bool })
+
+(define-map farm-deposits
+    { user: principal, protocol-id: uint }
+    { deposited-amount: uint, earned-yield: uint, last-harvest: uint })
+
+(define-data-var total-yield-earned uint u0)
+
+(define-public (initialize-yield-farms)
+    (begin
+        (map-set yield-farms
+            { protocol-id: HIGH_YIELD_PROTOCOL }
+            { apy: u1500, risk-level: u8, min-amount: u500, active: true })
+        (map-set yield-farms
+            { protocol-id: STABLE_YIELD_PROTOCOL }
+            { apy: u600, risk-level: u3, min-amount: u100, active: true })
+        (map-set yield-farms
+            { protocol-id: BALANCED_YIELD_PROTOCOL }
+            { apy: u900, risk-level: u5, min-amount: u250, active: true })
+        (ok true)))
+
+(define-public (set-farm-allocation (protocol-1-percent uint) (protocol-2-percent uint) (protocol-3-percent uint))
+    (begin
+        (asserts! (is-eq (+ protocol-1-percent protocol-2-percent protocol-3-percent) u100) (err u109))
+        (map-set user-farm-allocations
+            { user: tx-sender }
+            { protocol-1-percent: protocol-1-percent,
+              protocol-2-percent: protocol-2-percent,
+              protocol-3-percent: protocol-3-percent,
+              auto-reallocate: true })
+        (ok true)))
+
+(define-public (allocate-to-farms (amount uint))
+    (let ((allocation (default-to 
+            { protocol-1-percent: u0, protocol-2-percent: u0, protocol-3-percent: u0, auto-reallocate: false }
+            (map-get? user-farm-allocations { user: tx-sender })))
+          (user-balance (get-balance tx-sender)))
+        (begin
+            (asserts! (> amount u0) ERR_AMOUNT_ZERO)
+            (asserts! (>= user-balance amount) ERR_INSUFFICIENT_FUNDS)
+            (asserts! (get auto-reallocate allocation) (err u110))
+            (let ((protocol-1-amount (/ (* amount (get protocol-1-percent allocation)) u100))
+                  (protocol-2-amount (/ (* amount (get protocol-2-percent allocation)) u100))
+                  (protocol-3-amount (/ (* amount (get protocol-3-percent allocation)) u100)))
+                (begin
+                    (map-set balances 
+                        { user: tx-sender } 
+                        { balance: (- user-balance amount) })
+                    (if (> protocol-1-amount u0)
+                        (let ((current-deposit (default-to 
+                                { deposited-amount: u0, earned-yield: u0, last-harvest: block-height }
+                                (map-get? farm-deposits { user: tx-sender, protocol-id: HIGH_YIELD_PROTOCOL }))))
+                            (map-set farm-deposits
+                                { user: tx-sender, protocol-id: HIGH_YIELD_PROTOCOL }
+                                { deposited-amount: (+ protocol-1-amount (get deposited-amount current-deposit)),
+                                  earned-yield: (get earned-yield current-deposit),
+                                  last-harvest: block-height }))
+                        true)
+                    (if (> protocol-2-amount u0)
+                        (let ((current-deposit (default-to 
+                                { deposited-amount: u0, earned-yield: u0, last-harvest: block-height }
+                                (map-get? farm-deposits { user: tx-sender, protocol-id: STABLE_YIELD_PROTOCOL }))))
+                            (map-set farm-deposits
+                                { user: tx-sender, protocol-id: STABLE_YIELD_PROTOCOL }
+                                { deposited-amount: (+ protocol-2-amount (get deposited-amount current-deposit)),
+                                  earned-yield: (get earned-yield current-deposit),
+                                  last-harvest: block-height }))
+                        true)
+                    (if (> protocol-3-amount u0)
+                        (let ((current-deposit (default-to 
+                                { deposited-amount: u0, earned-yield: u0, last-harvest: block-height }
+                                (map-get? farm-deposits { user: tx-sender, protocol-id: BALANCED_YIELD_PROTOCOL }))))
+                            (map-set farm-deposits
+                                { user: tx-sender, protocol-id: BALANCED_YIELD_PROTOCOL }
+                                { deposited-amount: (+ protocol-3-amount (get deposited-amount current-deposit)),
+                                  earned-yield: (get earned-yield current-deposit),
+                                  last-harvest: block-height }))
+                        true)
+                    (ok amount))))))
+
+(define-public (harvest-yield (protocol-id uint))
+    (let ((farm (default-to 
+            { apy: u0, risk-level: u0, min-amount: u0, active: false }
+            (map-get? yield-farms { protocol-id: protocol-id })))
+          (user-deposit (default-to 
+            { deposited-amount: u0, earned-yield: u0, last-harvest: block-height }
+            (map-get? farm-deposits { user: tx-sender, protocol-id: protocol-id }))))
+        (begin
+            (asserts! (get active farm) (err u111))
+            (asserts! (> (get deposited-amount user-deposit) u0) (err u112))
+            (let ((blocks-since-harvest (- block-height (get last-harvest user-deposit)))
+                  (yield-amount (/ (* (get deposited-amount user-deposit) (get apy farm) blocks-since-harvest) (* u10000 BLOCKS_PER_YEAR))))
+                (begin
+                    (map-set farm-deposits
+                        { user: tx-sender, protocol-id: protocol-id }
+                        { deposited-amount: (get deposited-amount user-deposit),
+                          earned-yield: (+ (get earned-yield user-deposit) yield-amount),
+                          last-harvest: block-height })
+                    (let ((current-balance (default-to { balance: u0 } (map-get? balances { user: tx-sender }))))
+                        (map-set balances 
+                            { user: tx-sender } 
+                            { balance: (+ yield-amount (get balance current-balance)) }))
+                    (var-set total-yield-earned (+ (var-get total-yield-earned) yield-amount))
+                    (ok yield-amount))))))
+
+(define-public (withdraw-from-farm (protocol-id uint) (amount uint))
+    (let ((user-deposit (default-to 
+            { deposited-amount: u0, earned-yield: u0, last-harvest: block-height }
+            (map-get? farm-deposits { user: tx-sender, protocol-id: protocol-id }))))
+        (begin
+            (asserts! (> amount u0) ERR_AMOUNT_ZERO)
+            (asserts! (>= (get deposited-amount user-deposit) amount) ERR_INSUFFICIENT_FUNDS)
+            (map-set farm-deposits
+                { user: tx-sender, protocol-id: protocol-id }
+                { deposited-amount: (- (get deposited-amount user-deposit) amount),
+                  earned-yield: (get earned-yield user-deposit),
+                  last-harvest: (get last-harvest user-deposit) })
+            (let ((current-balance (default-to { balance: u0 } (map-get? balances { user: tx-sender }))))
+                (map-set balances 
+                    { user: tx-sender } 
+                    { balance: (+ amount (get balance current-balance)) }))
+            (ok amount))))
+
+(define-read-only (get-farm-portfolio)
+    (let ((high-yield-deposit (default-to 
+            { deposited-amount: u0, earned-yield: u0, last-harvest: u0 }
+            (map-get? farm-deposits { user: tx-sender, protocol-id: HIGH_YIELD_PROTOCOL })))
+          (stable-yield-deposit (default-to 
+            { deposited-amount: u0, earned-yield: u0, last-harvest: u0 }
+            (map-get? farm-deposits { user: tx-sender, protocol-id: STABLE_YIELD_PROTOCOL })))
+          (balanced-yield-deposit (default-to 
+            { deposited-amount: u0, earned-yield: u0, last-harvest: u0 }
+            (map-get? farm-deposits { user: tx-sender, protocol-id: BALANCED_YIELD_PROTOCOL }))))
+        (ok {
+            high-yield-deposited: (get deposited-amount high-yield-deposit),
+            high-yield-earned: (get earned-yield high-yield-deposit),
+            stable-yield-deposited: (get deposited-amount stable-yield-deposit),
+            stable-yield-earned: (get earned-yield stable-yield-deposit),
+            balanced-yield-deposited: (get deposited-amount balanced-yield-deposit),
+            balanced-yield-earned: (get earned-yield balanced-yield-deposit),
+            total-deposited: (+ (+ (get deposited-amount high-yield-deposit) 
+                                  (get deposited-amount stable-yield-deposit))
+                               (get deposited-amount balanced-yield-deposit)),
+            total-earned: (+ (+ (get earned-yield high-yield-deposit) 
+                               (get earned-yield stable-yield-deposit))
+                            (get earned-yield balanced-yield-deposit))
+        })))
+
+(define-public (rebalance-farms)
+    (let ((allocation (default-to 
+            { protocol-1-percent: u0, protocol-2-percent: u0, protocol-3-percent: u0, auto-reallocate: false }
+            (map-get? user-farm-allocations { user: tx-sender })))
+          (portfolio (unwrap-panic (get-farm-portfolio))))
+        (begin
+            (asserts! (get auto-reallocate allocation) (err u110))
+            (let ((total-deposited (get total-deposited portfolio)))
+                (if (> total-deposited u0)
+                    (begin
+                        (try! (withdraw-from-farm HIGH_YIELD_PROTOCOL (get high-yield-deposited portfolio)))
+                        (try! (withdraw-from-farm STABLE_YIELD_PROTOCOL (get stable-yield-deposited portfolio)))
+                        (try! (withdraw-from-farm BALANCED_YIELD_PROTOCOL (get balanced-yield-deposited portfolio)))
+                        (try! (allocate-to-farms total-deposited))
+                        (ok true))
+                    (ok false))))))
+
 
