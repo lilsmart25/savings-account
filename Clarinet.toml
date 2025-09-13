@@ -9,6 +9,16 @@ requirements = []
 path = 'contracts/savings-account.clar'
 clarity_version = 2
 epoch = 2.5
+
+[contracts.deposit-insurance]
+path = 'contracts/deposit-insurance.clar'
+clarity_version = 2
+epoch = 2.5
+
+[contracts.savings-plan-automation]
+path = 'contracts/savings-plan-automation.clar'
+clarity_version = 2
+epoch = 2.5
 [repl.analysis]
 passes = ['check_checker']
 

@@ -50,8 +50,18 @@ plan:
     - id: 0
       transactions:
         - emulated-contract-publish:
+            contract-name: deposit-insurance
+            emulated-sender: ST1PQHQKV0RJXZFY1DGX8MNSNYVE3VGZJSRTPGZGM
+            path: "contracts\\deposit-insurance.clar"
+            clarity-version: 2
+        - emulated-contract-publish:
             contract-name: savings-account
             emulated-sender: ST1PQHQKV0RJXZFY1DGX8MNSNYVE3VGZJSRTPGZGM
-            path: contracts/savings-account.clar
+            path: "contracts\\savings-account.clar"
+            clarity-version: 2
+        - emulated-contract-publish:
+            contract-name: savings-plan-automation
+            emulated-sender: ST1PQHQKV0RJXZFY1DGX8MNSNYVE3VGZJSRTPGZGM
+            path: "contracts\\savings-plan-automation.clar"
             clarity-version: 2
       epoch: "2.5"
